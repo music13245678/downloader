@@ -11,17 +11,18 @@ import (
 	"time"
 
 	"github.com/canhlinh/log4go"
-	"github.com/canhlinh/pluto"
+	"github.com/music13245678/pluto" // đảm bảo trỏ đúng repo mới
 	"gopkg.in/cheggaaa/pb.v1"
 )
 
+// Các hằng số cấu hình
 const (
-	MaxParts = 20
+	DefaultMaxParts = 20
 )
 
 var (
 	DefaultSlowDuration       = 30
-	DefaultSlowSpeed    int64 = 100000
+	DefaultSlowSpeed    int64 = 100000 // 100KB/s
 )
 
 type DirectDownloader struct {
@@ -57,8 +58,16 @@ func (d *DirectDownloader) init() error {
 		return err
 	}
 
-	log4go.Info("Max parts %v", d.DlSource.MaxParts)
-	d.pluto, err = pluto.New(fileURL, headers, d.DlSource.MaxParts, false, d.DlSource.Proxy)
+	// Lấy số kết nối từ request, nếu không có thì dùng mặc định 20
+	maxParts := d.DlSource.MaxParts
+	if maxParts <= 0 {
+		maxParts = DefaultMaxParts
+	}
+
+	log4go.Info("Khởi tạo download với %v kết nối cho file %s", maxParts, d.FileID)
+
+	// Truyền số kết nối (maxParts) vào Pluto
+	d.pluto, err = pluto.New(fileURL, headers, uint(maxParts), false, d.DlSource.Proxy)
 	if err != nil {
 		return err
 	}
@@ -66,19 +75,17 @@ func (d *DirectDownloader) init() error {
 }
 
 func (d *DirectDownloader) Do() (result *DownloadResult, err error) {
-
 	if err := d.init(); err != nil {
 		return nil, err
 	}
-	log4go.Info("Start download direct url %s", d.DlSource.Value)
 
 	quit := make(chan bool)
 	dir := makeDownloadDir()
+	
+	// Tự động dọn dẹp nếu có lỗi xảy ra
 	defer func() {
-		if result == nil {
-			if err := os.RemoveAll(dir); err != nil {
-				log4go.Error(err)
-			}
+		if err != nil {
+			os.RemoveAll(dir)
 		}
 	}()
 
@@ -98,26 +105,36 @@ func (d *DirectDownloader) Do() (result *DownloadResult, err error) {
 		close(quit)
 	}()
 
+	// Tạo context có thể cancel để ngắt Pluto khi cần
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Goroutine giám sát tốc độ
 	go func() {
 		period := time.Duration(DefaultSlowDuration)
 		ticker := time.NewTicker(period * time.Second)
-		downloaded := int64(0)
+		defer ticker.Stop()
+		
+		var lastDownloaded int64
 
 		for {
 			select {
 			case <-ticker.C:
 				current := bar.Get()
-				avgSpeed := (current - downloaded) / int64(period)
+				avgSpeed := (current - lastDownloaded) / int64(period)
+				
 				if avgSpeed < DefaultSlowSpeed {
-					log4go.Warn("Cancelling download thread for file_id %s. AvgSpeed %v(Kbs)", d.FileID, float64(avgSpeed)/1000)
-					cancel()
+					log4go.Warn("[%s] Tải quá chậm (%v Kbs). Kích hoạt ngắt luồng!", d.FileID, float64(avgSpeed)/1000)
+					cancel() // Gửi lệnh dừng tới Pluto
 					return
 				}
-				downloaded = current
-			case s := <-d.pluto.StatsChan:
+				lastDownloaded = current
+			case s, ok := <-d.pluto.StatsChan:
+				if !ok { return }
 				bar.Set64(int64(s.Downloaded))
 			case <-d.pluto.Finished:
+				return
+			case <-ctx.Done():
 				return
 			case <-quit:
 				return
@@ -125,14 +142,17 @@ func (d *DirectDownloader) Do() (result *DownloadResult, err error) {
 		}
 	}()
 
-	if r, err := d.pluto.Download(ctx, f); err != nil {
-		if strings.Contains(err.Error(), "context cancel") {
+	log4go.Info("Bắt đầu Pluto Download: %s", d.DlSource.Value)
+	
+	// Gọi hàm Download của Pluto (nhớ dùng bản Pluto đã sửa để nhận ctx)
+	if r, dlErr := d.pluto.Download(ctx, f); dlErr != nil {
+		if errors.Is(dlErr, context.Canceled) || strings.Contains(dlErr.Error(), "context canceled") {
+			log4go.Error("[%s] Đã hủy tải do tốc độ không đạt yêu cầu", d.FileID)
 			return nil, errors.New("cancelled due to slow download speed")
 		}
-		os.RemoveAll(f.Name())
-		return nil, err
+		return nil, dlErr
 	} else {
-		log4go.Info("Pluto download result file: %s size: %v", r.FileName, r.Size)
+		log4go.Info("[%s] Tải xong! Kích thước: %v", d.FileID, r.Size)
 	}
 
 	result = &DownloadResult{
