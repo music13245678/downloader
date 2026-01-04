@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/canhlinh/log4go"
-	"github.com/music13245678/pluto" // đảm bảo trỏ đúng repo mới
+	"github.com/canhlinh/pluto" // đảm bảo trỏ đúng repo mới
 	"gopkg.in/cheggaaa/pb.v1"
 )
 
