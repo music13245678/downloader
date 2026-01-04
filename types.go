@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/music13245678/pluto"
+	"github.com/canhlinh/pluto"
 )
 
 type Cookie struct {
