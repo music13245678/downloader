@@ -1,4 +1,4 @@
-module github.com/music13245678/downloader
+module github.com/canhlinh/downloader
 
 go 1.20
 
