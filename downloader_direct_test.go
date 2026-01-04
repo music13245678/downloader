@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/canhlinh/pluto"
+	"github.com/music13245678/pluto"
 )
 
 func TestDownloadDirect(t *testing.T) {
